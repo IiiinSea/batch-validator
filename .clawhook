@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""
+OpenClaw Skill 钩子 - 自动处理Excel vs PPT批量校验请求
+触发词：校验、验证、对比、批量检查、Excel PPT校验
+"""
+import sys
+import re
+import os
+import asyncio
+
+def main():
+    # 获取用户输入
+    user_input = sys.argv[1] if len(sys.argv) > 1 else ""
+
+    # 匹配校验请求模式
+    patterns = [
+        r'校验.*?(Excel|PPT|表格|幻灯片)',
+        r'验证.*?(Excel|PPT|表格|幻灯片)',
+        r'对比.*?(Excel|PPT|表格|幻灯片)',
+        r'批量.*?检查',
+        r'批量.*?校验',
+        r'Excel.*?PPT.*?(校验|对比|验证)',
+        r'PPT.*?Excel.*?(校验|对比|验证)',
+    ]
+
+    is_validation_request = False
+    for pattern in patterns:
+        if re.search(pattern, user_input, re.IGNORECASE):
+            is_validation_request = True
+            break
+
+    if not is_validation_request:
+        # 没有匹配到校验请求，不处理
+        print("NO_REPLY")
+        return
+
+    # 提示用户
+    print("✅ 已识别到批量校验请求")
+    print("📋 请提供以下文件：")
+    print("  1. Excel文件（信息列表）")
+    print("  2. PPT文件（对应截图和文字标注）")
+    print()
+    print("💡 我将帮你完成：")
+    print("  • 提取PPT文字内容")
+    print("  • 解析PPT截图")
+    print("  • 逐行校验7项内容")
+    print("  • 生成格式化结果Excel")
+    print()
+    print("请告诉我Excel和PPT文件的路径，或者直接上传文件。")
+
+if __name__ == "__main__":
+    main()

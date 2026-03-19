@@ -1,0 +1,15 @@
+[project]
+name = "batch-validator-skill"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "openpyxl>=3.1.0",
+    "python-pptx>=1.0.0",
+    "pillow>=10.0.0",
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+]
+
+[tool.uv]
+python-preference = "only-managed"
+dev-dependencies = []
