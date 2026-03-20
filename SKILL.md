@@ -109,16 +109,31 @@ uv run scripts/validate.py <ppt文件> <excel文件> screenshot_stats.json
 
 ## 依赖安装
 
+**基础依赖（必需）：**
 ```bash
 cd batch-validator
 uv sync
 ```
 
-依赖包：
-- `openpyxl` - Excel读写
-- `python-pptx` - PPT文字和图片提取
-- `pillow` - 图像处理
-- `requests` + `beautifulsoup4` - 网页抓取
+**Vision API（可选，用于截图识别）：**
+```bash
+# 选择一个或多个大模型平台
+uv sync --extra claude     # Anthropic Claude（推荐）
+uv sync --extra openai     # OpenAI GPT-4V
+uv sync --extra gemini     # Google Gemini
+uv sync --extra all        # 安装所有Vision API
+
+# 配置API密钥
+cp .env.example .env
+# 编辑.env文件，填入API密钥
+```
+
+**支持的大模型平台：**
+- ✅ **Claude** (Anthropic) - 推荐，准确率高
+- ✅ **GPT-4V** (OpenAI) - 通用性强
+- ✅ **Gemini** (Google) - 免费额度大
+
+系统会自动检测可用的API密钥并选择合适的后端。
 
 ## 目录结构
 

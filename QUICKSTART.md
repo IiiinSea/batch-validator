@@ -6,14 +6,24 @@
 ```bash
 cd /Users/dingpei/yiling/batch-validator
 uv sync
+
+# 可选：安装Vision API（自动识别截图中的粉丝数/阅读量）
+uv sync --extra claude  # 推荐：Anthropic Claude
 ```
 
-### 2. 运行校验
+### 2. 配置API密钥（可选）
+```bash
+# 如果安装了Vision API
+cp .env.example .env
+# 编辑.env，填入API密钥
+```
+
+### 3. 运行校验
 ```bash
 uv run scripts/validate.py <ppt文件路径> <excel文件路径>
 ```
 
-### 3. 查看结果
+### 4. 查看结果
 打开生成的 `原文件名-校验结果.xlsx` 文件
 
 ---

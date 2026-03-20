@@ -116,16 +116,27 @@ Step 5: 读取Excel数据...
 ```
 校验5-粉丝数量:
   [Tier 1] PPT文字 → 未找到
-  [Tier 2] 截图识别 → 找到: 1647
+  [Tier 2] 截图识别（Vision API）:
+    → 检测到API密钥: ANTHROPIC_API_KEY
+    → 使用Claude识别截图
+    → 找到: 1647
   [Tier 3] 网页抓取 → 跳过（已找到）
-  结果: Excel"/" vs PPT"1647" → 信息：截图显示1647，Excel未记录
+  结果: Excel"/" vs PPT"1647" → 信息：Claude识别到1647，Excel未记录
 
 校验6-阅读量:
   [Tier 1] PPT文字 → 未找到
-  [Tier 2] 截图识别 → 未找到
-  [Tier 3] 网页抓取 → 未找到
+  [Tier 2] 截图识别（Vision API）:
+    → 使用Claude识别截图
+    → 未找到
+  [Tier 3] 网页抓取 → 尝试从URL获取 → 未找到
   结果: N/A：PPT文字、截图和网页均未找到阅读量
 ```
+
+**Vision API后端自动选择：**
+- 系统自动检测环境变量中的API密钥
+- 优先级：Claude > OpenAI > Gemini
+- 支持配置 `PREFERRED_VISION_BACKEND` 指定后端
+- 一个失败会自动尝试下一个
 
 **输出**：
 ```

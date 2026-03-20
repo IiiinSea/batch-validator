@@ -90,11 +90,11 @@ def fetch_stats_from_url(url):
         return {'followers': None, 'views': None, 'error': str(e)}
 
 
-def get_stats_3tier(slide_number, ppt_text_data, screenshot_stats, url):
+def get_stats_3tier(slide_number, ppt_text_data, screenshot_stats, url, slide_image_path=None):
     """
     Get stats with 3-tier priority:
     1. PPT text (already in ppt_text_data)
-    2. Screenshot (from screenshot_stats JSON)
+    2. Screenshot (from screenshot_stats JSON or auto OCR)
     3. Web page (fetch if needed)
 
     Returns: dict with followers, views, and source
@@ -123,6 +123,31 @@ def get_stats_3tier(slide_number, ppt_text_data, screenshot_stats, url):
             if not result['source']:
                 result['source'] = 'screenshot'
 
+    # Tier 2: Auto Vision API if screenshot_stats not provided
+    if slide_image_path and not screenshot_stats and (not result['followers'] or not result['views']):
+        print(f"    尝试使用Vision API自动识别截图...")
+        try:
+            from vision_api import auto_extract_stats
+            vision_stats = auto_extract_stats(slide_image_path)
+
+            if 'error' not in vision_stats:
+                if not result['followers'] and vision_stats.get('followers'):
+                    result['followers'] = vision_stats['followers']
+                    result['source'] = vision_stats.get('backend', 'vision')
+
+                if not result['views'] and vision_stats.get('views'):
+                    result['views'] = vision_stats['views']
+                    result['source'] = result['source'] or vision_stats.get('backend', 'vision')
+
+                if result['followers'] or result['views']:
+                    print(f"      ✓ 识别成功 ({vision_stats.get('backend', 'vision')}): 粉丝={result.get('followers', 'N/A')}, 阅读={result.get('views', 'N/A')}")
+            else:
+                print(f"      ⚠ Vision API不可用: {vision_stats.get('error', 'Unknown error')}")
+        except ImportError:
+            print(f"      ⚠ Vision API模块未安装（可选功能）")
+        except Exception as e:
+            print(f"      ⚠ Vision识别失败: {e}")
+
     # Tier 3: Web (if still missing data)
     if url and (not result['followers'] or not result['views']):
         print(f"    尝试从网页获取...")
@@ -142,8 +167,8 @@ def get_stats_3tier(slide_number, ppt_text_data, screenshot_stats, url):
     return result
 
 
-def validate_row(excel_row, ppt_data, screenshot_stats):
-    """Validate Excel row with 3-tier stats extraction"""
+def validate_row(excel_row, ppt_data, screenshot_stats, slide_image_path=None):
+    """Validate Excel row with 3-tier stats extraction (including OCR)"""
     results = {
         'excel_row': excel_row['_excel_row'],
         'slide': ppt_data.get('slide_number')
@@ -198,10 +223,13 @@ def validate_row(excel_row, ppt_data, screenshot_stats):
     slide_num = ppt_data.get('slide_number')
     url = ppt_data.get('link')
 
-    stats = get_stats_3tier(slide_num, ppt_data, screenshot_stats, url)
+    stats = get_stats_3tier(slide_num, ppt_data, screenshot_stats, url, slide_image_path)
 
     source_display = {
         'screenshot': '截图',
+        'claude': 'Claude',
+        'openai': 'GPT-4V',
+        'gemini': 'Gemini',
         'web': '网页',
         'none': 'N/A'
     }.get(stats['source'], stats['source'])
@@ -349,10 +377,11 @@ def main(ppt_path, excel_path, screenshot_stats_json=None, output_path=None):
     temp_json = ppt_path.parent / "ppt_text_temp.json"
     extract_ppt_text(str(ppt_path), str(temp_json))
 
-    # Step 2: Extract slide screenshots (for later manual processing)
+    # Step 2: Extract slide screenshots (for OCR or manual processing)
     print("\nStep 2: 提取PPT幻灯片截图...")
     slides_dir = ppt_path.parent / "slides"
-    extract_slide_images(str(ppt_path), str(slides_dir))
+    slide_images = extract_slide_images(str(ppt_path), str(slides_dir))
+    print(f"  提取了 {len(slide_images)} 张幻灯片")
 
     # Step 3: Parse PPT data
     print("\nStep 3: 解析PPT数据...")
@@ -384,7 +413,10 @@ def main(ppt_path, excel_path, screenshot_stats_json=None, output_path=None):
             print(f"\n第{i+1}行:")
             ppt_data = ppt_slides_data[i]
 
-            result = validate_row(excel_row, ppt_data, screenshot_stats)
+            # Get corresponding slide image if available
+            slide_img = slide_images[i] if i < len(slide_images) else None
+
+            result = validate_row(excel_row, ppt_data, screenshot_stats, slide_img)
             validation_results.append(result)
             print(f"  ✓ 校验完成")
 
