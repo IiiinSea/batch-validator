@@ -7,7 +7,7 @@
 3. 文字优先搜索需要的字段（平台/标题/时间/账号/位置/粉丝/阅读）
    - 文字找到就用文字，文字找不到才用图片识别
 4. 图片兜底识别缺失字段 → 调用项目已有的 extract_content (兼容 Kimi)
-   → 每张图片都识别，收集所有结果 → 粉丝/阅读分别取最大值
+   → 每张图片都识别，**并发处理**提高速度，收集所有结果 → 粉丝/阅读分别取最大值
 5. 解析PPT文字得到结构化数据
 6. 和Excel对比校验
 7. 生成带颜色标记的结果Excel
@@ -112,6 +112,102 @@ def get_client():
     )
 
 
+def process_single_image_kimi(img_path: str, fields):
+    """Process a single image with Kimi, for concurrent execution"""
+    img_name = Path(img_path).name
+    results = kimi_extract([img_path], fields)
+    if not results:
+        return {
+            'followers': None,
+            'views': None,
+            'image': img_path,
+            'img_name': img_name,
+        }
+    result = results[0]
+    return {
+        'followers': result.get('followers'),
+        'views': result.get('views'),
+        'image': img_path,
+        'img_name': img_name,
+    }
+
+
+def process_slide_images_kimi(slide_images: list[str]):
+    """
+    Process all images in one slide using Kimi extract_content (already compatible)
+    If multiple images have data, keep the MAXIMUM value (reading grows over time)
+    **Concurrent processing** for speed
+    """
+    import concurrent.futures
+    
+    followers_candidates: list[tuple[int, str | int, str]] = []  # (normalized, original, image_path)
+    views_candidates: list[tuple[int, str | int, str]] = []
+    
+    fields = [
+        {"name": "followers", "description": "粉丝数/粉丝量/关注数量", "type": "number"},
+        {"name": "views", "description": "阅读量/浏览量/点击数量", "type": "number"},
+    ]
+    
+    print(f"      并发识别 {len(slide_images)} 张图片...")
+    
+    # Concurrent processing
+    processed = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(slide_images), 8)) as executor:
+        futures = [executor.submit(process_single_image_kimi, img, fields) for img in slide_images]
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            processed.append(result)
+            
+            img_name = result['img_name']
+            img_path = result['image']
+            followers = result['followers']
+            views = result['views']
+            
+            if followers is not None and followers != 'null' and followers != '':
+                norm_val = normalize_number(followers)
+                if norm_val is not None:
+                    followers_candidates.append((norm_val, followers, img_path))
+                    print(f"      ✓ 找到粉丝数: {followers} (在 {img_name})")
+            
+            if views is not None and views != 'null' and views != '':
+                norm_val = normalize_number(views)
+                if norm_val is not None:
+                    views_candidates.append((norm_val, views, img_path))
+                    print(f"      ✓ 找到阅读量: {views} (在 {img_name})")
+    
+    # After processing all images, select MAX
+    result = {
+        'followers': None,
+        'views': None,
+        'processed': processed,
+        'found_in': None,
+    }
+    
+    if followers_candidates:
+        followers_candidates.sort(key=lambda x: x[0])
+        largest = followers_candidates[-1]
+        result['followers'] = largest[1]
+        result['found_in'] = largest[2]
+        if len(followers_candidates) > 1:
+            print(f"      ⚙ 选择最大值: {largest[1]} (共 {len(followers_candidates)} 个候选)")
+    
+    if views_candidates:
+        views_candidates.sort(key=lambda x: x[0])
+        largest = views_candidates[-1]
+        result['views'] = largest[1]
+        result['found_in'] = largest[2]
+        if len(views_candidates) > 1:
+            print(f"      ⚙ 选择最大值: {largest[1]} (共 {len(views_candidates)} 个候选)")
+    
+    if result['found_in'] is None:
+        if followers_candidates:
+            result['found_in'] = followers_candidates[-1][2]
+        elif views_candidates:
+            result['found_in'] = views_candidates[-1][2]
+    
+    return result
+
+
 def extract_stats_from_image_openai(image_path: str, client, model: str):
     """Extract followers and views from image using OpenAI compatible vision"""
     import base64
@@ -172,124 +268,51 @@ def extract_stats_from_image_openai(image_path: str, client, model: str):
             'followers': result.get('followers'),
             'views': result.get('views'),
             'image': str(image_path),
+            'img_name': Path(image_path).name,
         }
     except json.JSONDecodeError as e:
         return {
             'followers': None,
             'views': None,
             'image': str(image_path),
+            'img_name': Path(image_path).name,
             'error': result_text[:100],
         }
 
 
-def process_slide_images_kimi(slide_images: list[str]):
-    """
-    Process all images in one slide using Kimi extract_content (already compatible)
-    If multiple images have data, keep the MAXIMUM value (reading grows over time)
-    Process one image at a time for better recognition
-    """
-    followers_candidates: list[tuple[int, str | int, str]] = []  # (normalized, original, image_path)
-    views_candidates: list[tuple[int, str | int, str]] = []
-    
-    fields = [
-        {"name": "followers", "description": "粉丝数/粉丝量/关注数量", "type": "number"},
-        {"name": "views", "description": "阅读量/浏览量/点击数量", "type": "number"},
-    ]
-    
-    processed = []
-    
-    # Process one image at a time for better recognition
-    for img_path in slide_images:
-        img_name = Path(img_path).name
-        print(f"      Kimi 识别图片: {img_name}")
-        results = kimi_extract([img_path], fields)
-        
-        if not results:
-            processed.append({
-                'followers': None,
-                'views': None,
-                'image': img_path,
-            })
-            continue
-        
-        result = results[0]
-        followers = result.get('followers')
-        views = result.get('views')
-        
-        processed.append({
-            'followers': followers,
-            'views': views,
-            'image': img_path,
-        })
-        
-        if followers is not None and followers != 'null' and followers != '':
-            norm_val = normalize_number(followers)
-            if norm_val is not None:
-                followers_candidates.append((norm_val, followers, img_path))
-                print(f"      ✓ 找到粉丝数: {followers} (在 {img_name})")
-        
-        if views is not None and views != 'null' and views != '':
-            norm_val = normalize_number(views)
-            if norm_val is not None:
-                views_candidates.append((norm_val, views, img_path))
-                print(f"      ✓ 找到阅读量: {views} (在 {img_name})")
-    
-    # After processing all images, select MAX
-    result = {
-        'followers': None,
-        'views': None,
-        'processed': processed,
-        'found_in': None,
-    }
-    
-    if followers_candidates:
-        followers_candidates.sort(key=lambda x: x[0])
-        largest = followers_candidates[-1]
-        result['followers'] = largest[1]
-        result['found_in'] = largest[2]
-        if len(followers_candidates) > 1:
-            print(f"      ⚙ 选择最大值: {largest[1]} (共 {len(followers_candidates)} 个候选)")
-    
-    if views_candidates:
-        views_candidates.sort(key=lambda x: x[0])
-        largest = views_candidates[-1]
-        result['views'] = largest[1]
-        result['found_in'] = largest[2]
-        if len(views_candidates) > 1:
-            print(f"      ⚙ 选择最大值: {largest[1]} (共 {len(views_candidates)} 个候选)")
-    
-    if result['found_in'] is None:
-        if followers_candidates:
-            result['found_in'] = followers_candidates[-1][2]
-        elif views_candidates:
-            result['found_in'] = views_candidates[-1][2]
-    
-    return result
-
-
 def process_slide_images_openai(slide_images: list[str], client, model):
-    """OpenAI compatible version"""
+    """OpenAI compatible version — **Concurrent processing** for speed"""
+    import concurrent.futures
+    
     followers_candidates: list[tuple[int, str, str]] = []  # (normalized, original, image_path)
     views_candidates: list[tuple[int, str, str]] = []
     
-    processed = []
+    print(f"      并发识别 {len(slide_images)} 张图片...")
     
-    for img_path in slide_images:
-        print(f"      识别图片: {Path(img_path).name}")
-        stats = extract_stats_from_image_openai(img_path, client, model)
-        processed.append(stats)
-        
-        if stats['followers'] and stats['followers'] != 'null':
-            norm_val = normalize_number(stats['followers'])
-            if norm_val is not None:
-                followers_candidates.append((norm_val, stats['followers'], img_path))
-                print(f"      ✓ 找到粉丝数: {stats['followers']} (在 {Path(img_path).name})")
-        
-        if stats['views'] and stats['views'] != 'null':
-            norm_val = normalize_number(stats['views'])
-            if norm_val is not None:
-                views_candidates.append((norm_val, stats['views'], img_path))
-                print(f"      ✓ 找到阅读量: {stats['views']} (在 {Path(img_path).name})")
+    # Concurrent processing
+    processed = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(slide_images), 8)) as executor:
+        futures = [executor.submit(extract_stats_from_image_openai, img, client, model) for img in slide_images]
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            processed.append(result)
+            
+            img_name = result['img_name']
+            img_path = result['image']
+            followers = result['followers']
+            views = result['views']
+            
+            if followers and followers != 'null':
+                norm_val = normalize_number(followers)
+                if norm_val is not None:
+                    followers_candidates.append((norm_val, followers, img_path))
+                    print(f"      ✓ 找到粉丝数: {followers} (在 {img_name})")
+            
+            if views and views != 'null':
+                norm_val = normalize_number(views)
+                if norm_val is not None:
+                    views_candidates.append((norm_val, views, img_path))
+                    print(f"      ✓ 找到阅读量: {views} (在 {img_name})")
     
     # After processing all images, select MAX
     result = {
@@ -535,6 +558,7 @@ def main(ppt_path: str, excel_path: str, output_path: str = None):
     print("Batch Validator - 全自动完整校验")
     print("流程: 提取文字 → 提取所有图片 → 文字优先搜索 → 图片兜底识别缺失字段 → 汇总取最大值 → 校验 → 输出")
     print(f"Vision 模型: {'Kimi K2.5' if client_type == 'kimi' else 'OpenAI 兼容'}")
+    print("并发处理: ✅ 开启 (最大 8 并发)")
     print("=" * 80)
     print()
 
@@ -656,7 +680,7 @@ if __name__ == "__main__":
         print("  1. 提取PPT文字")
         print("  2. 提取每页所有图片（多张不漏）")
         print("  3. 文字优先查询结构化信息，文字找不到才图片识别")
-        print("  4. 每张图片都识别，收集所有找到的值 → 粉丝/阅读分别取最大值")
+        print("  4. 每张图片都识别，**并发处理**提高速度，收集所有找到的值 → 粉丝/阅读分别取最大值")
         print("    → 符合需求：阅读量随着时间会快速变化，我们应该取最大的那个值")
         print("  5. 和Excel对比校验")
         print("  6. 生成带颜色标记的结果Excel")
