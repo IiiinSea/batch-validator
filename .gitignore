@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+.uv/
+
+# uv
+uv.lock
+.python-version
+
+# 临时文件
+ppt_text_temp.json
+*.tmp
+
+# 输出文件
+output/
+slides/
+web_content/
+screenshot_stats.json
+
+# 测试文件
+test_*.xlsx
+test_*.pptx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
