@@ -1,46 +1,122 @@
 #!/usr/bin/env python3
 """
-全自动完整校验流程：
-1. 提取PPT文字
-2. 提取每页所有图片（多张图片都提取）
-3. 对每张图片调用OpenClaw vision识别粉丝量/阅读量
-4. 汇总每页所有图片识别结果，取第一个找到的数据
-5. 解析PPT文字数据
+全自动完整校验流程 —— 文字优先 + 图片兜底（支持 Kimi K2.5 / 豆包）
+流程：
+1. 提取PPT文字 → 保存到 txt
+2. 提取每页所有图片 → 保存到文件夹
+3. 文字优先搜索需要的字段（平台/标题/时间/账号/位置/粉丝/阅读）
+   - 文字找到就用文字，文字找不到才用图片识别
+4. 图片兜底识别缺失字段 → 调用项目已有的 extract_content (兼容 Kimi)
+   → 每张图片都识别，收集所有结果 → 粉丝/阅读分别取最大值
+5. 解析PPT文字得到结构化数据
 6. 和Excel对比校验
-7. 生成结果Excel
+7. 生成带颜色标记的结果Excel
 
 完全自动化，一步到位：
-python full_auto_validate.py <ppt_file> <excel_file> [output_file]
+uv run scripts/full_auto_validate.py <ppt_file> <excel_file> [output_file]
+
+支持环境变量配置：
+-  Kimi K2.5:
+    MOONSHOT_API_KEY  or  MOONSHOT_MODEL_KEY
+    MOONSHOT_MODEL  (optional, default: kimi-k2.5)
+
+-  OPENAI 兼容格式（豆包/Anthropic/OpenAI）:
+    OPENCLAW_VISION_API_KEY
+    OPENCLAW_VISION_BASE_URL  (optional, default: https://ark.cn-beijing.volces.com/api/coding/v3)
+    OPENCLAW_VISION_MODEL   (optional, default: doubao-seed-2.0-code)
+
+自动检测：如果找到 MOONSHOT_API_KEY 就用 Kimi，否则用 OPENCLAW_VISION。
 """
 
 import sys
 import json
 import os
-import base64
 from pathlib import Path
-from openai import OpenAI
+from openpyxl import load_workbook
+from openpyxl.styles import Font, Alignment, PatternFill
 
 from extract_ppt_text import extract_ppt_text
 from extract_all_images import extract_all_images
 from parse_ppt_data import parse_all_slides
-from openpyxl import load_workbook
-from openpyxl.styles import Font, Alignment, PatternFill
+from extract_content import extract as kimi_extract
 
 
-def encode_image(image_path):
-    """Encode image to base64 for API call"""
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
+# ── 工具函数 ──────────────────────────────────────────────────────────────
 
-
-def extract_stats_from_image(image_path, api_key, base_url, model):
-    """
-    Use OpenClaw's vision model to extract stats from image
-    Returns: dict with followers and views
-    """
-    client = OpenAI(api_key=api_key, base_url=base_url)
+def normalize_number(value):
+    """Normalize number from string to int for comparison"""
+    if value is None or value == 'null' or value == 'None' or value == '' or value is None:
+        return None
     
-    base64_image = encode_image(image_path)
+    if isinstance(value, (int, float)):
+        return int(value)
+    
+    value = str(value).strip().lower()
+    
+    # Remove thousands separators: "41, 682" → "41682"
+    value = value.replace(',', '').replace(' ', '')
+    
+    # Handle units
+    if '万' in value:
+        num_str = value.replace('万', '').strip()
+        try:
+            num = float(num_str)
+            return int(num * 10000)
+        except ValueError:
+            return None
+    if 'k' in value or '千' in value:
+        num_str = value.replace('k', '').replace('千', '').strip()
+        try:
+            num = float(num_str)
+            return int(num * 1000)
+        except ValueError:
+            return None
+    
+    # Plain number
+    try:
+        value = value.replace(',', '').replace(' ', '')
+        return int(float(value))
+    except ValueError:
+        # Extract all digits if still fails
+        import re
+        digits = re.findall(r'\d+', value)
+        if digits:
+            try:
+                return int(''.join(digits))
+            except ValueError:
+                pass
+        return None
+
+
+def get_client():
+    """Get vision client based on environment variables"""
+    # Check for Kimi first
+    moonshot_key = os.environ.get('MOONSHOT_API_KEY') or os.environ.get('MOONSHOT_MODEL_KEY')
+    if moonshot_key:
+        os.environ['MOONSHOT_API_KEY'] = moonshot_key
+        return 'kimi', None
+    
+    # Fallback to OpenCLaw vision (OpenAI compatible)
+    openclaw_key = os.environ.get('OPENCLAW_VISION_API_KEY')
+    if openclaw_key:
+        from openai import OpenAI
+        base_url = os.environ.get('OPENCLAW_VISION_BASE_URL', 'https://ark.cn-beijing.volces.com/api/coding/v3')
+        model = os.environ.get('OPENCLAW_VISION_MODEL', 'doubao-seed-2.0-code')
+        client = OpenAI(api_key=openclaw_key, base_url=base_url)
+        return 'openai', (client, model)
+    
+    raise ValueError(
+        "❌ 找不到API密钥，请设置环境变量:\n"
+        "  - 对于 Kimi K2.5:  export MOONSHOT_API_KEY=your-key\n"
+        "  - 对于 OpenAI 兼容（豆包/Anthropic/OpenAI）:  export OPENCLAW_VISION_API_KEY=your-key\n"
+    )
+
+
+def extract_stats_from_image_openai(image_path: str, client, model: str):
+    """Extract followers and views from image using OpenAI compatible vision"""
+    import base64
+    
+    base64_image = base64.b64encode(open(image_path, "rb").read()).decode('utf-8')
     
     prompt = """
 请仔细查看这张图片，提取以下数据：
@@ -54,6 +130,12 @@ def extract_stats_from_image(image_path, api_key, base_url, model):
   "views": "提取到的阅读量（如果没找到就是null）"
 }
 """
+
+    # Kimi requires temperature=1, others can use 0.0
+    if 'kimi' in model.lower() or 'moonshot' in model.lower():
+        temperature = 1.0
+    else:
+        temperature = 0.0
 
     response = client.chat.completions.create(
         model=model,
@@ -72,7 +154,7 @@ def extract_stats_from_image(image_path, api_key, base_url, model):
             }
         ],
         max_tokens=200,
-        temperature=0.0,
+        temperature=temperature,
     )
     
     result_text = response.choices[0].message.content.strip()
@@ -89,97 +171,78 @@ def extract_stats_from_image(image_path, api_key, base_url, model):
         return {
             'followers': result.get('followers'),
             'views': result.get('views'),
-            'image': str(image_path)
+            'image': str(image_path),
         }
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
         return {
             'followers': None,
             'views': None,
             'image': str(image_path),
-            'error': result_text[:100]
+            'error': result_text[:100],
         }
 
 
-def normalize_number_for_compare(value):
-    """Normalize number to integer for comparison"""
-    if value is None or value == 'null' or value == 'None' or value == '':
-        return None
-    
-    value = str(value).strip().lower()
-    value = value.replace(',', '').replace(' ', '')
-    
-    # Extract first number if multiple dots
-    parts = value.split('.')
-    if len(parts) > 2:
-        value = '.'.join(parts[:2])
-    
-    if '万' in value:
-        num_str = value.replace('万', '')
-        try:
-            num = float(num_str)
-            return int(num * 10000)
-        except ValueError:
-            return None
-    if 'k' in value or '千' in value:
-        num_str = value.replace('k', '').replace('千', '')
-        try:
-            num = float(num_str)
-            return int(num * 1000)
-        except ValueError:
-            return None
-    
-    try:
-        return int(float(value))
-    except ValueError:
-        # Extract any digits
-        import re
-        digits = re.findall(r'\d+', value)
-        if digits:
-            try:
-                return int(''.join(digits))
-            except ValueError:
-                pass
-        return None
-
-
-def process_slide_images(slide_images, api_key, base_url, model):
+def process_slide_images_kimi(slide_images: list[str]):
     """
-    Process all images in one slide, extract stats
-    If multiple images have data, keep the MAXIMUM value (since reading grows over time)
+    Process all images in one slide using Kimi extract_content (already compatible)
+    If multiple images have data, keep the MAXIMUM value (reading grows over time)
+    Process one image at a time for better recognition
     """
+    followers_candidates: list[tuple[int, str | int, str]] = []  # (normalized, original, image_path)
+    views_candidates: list[tuple[int, str | int, str]] = []
+    
+    fields = [
+        {"name": "followers", "description": "粉丝数/粉丝量/关注数量", "type": "number"},
+        {"name": "views", "description": "阅读量/浏览量/点击数量", "type": "number"},
+    ]
+    
+    processed = []
+    
+    # Process one image at a time for better recognition
+    for img_path in slide_images:
+        img_name = Path(img_path).name
+        print(f"      Kimi 识别图片: {img_name}")
+        results = kimi_extract([img_path], fields)
+        
+        if not results:
+            processed.append({
+                'followers': None,
+                'views': None,
+                'image': img_path,
+            })
+            continue
+        
+        result = results[0]
+        followers = result.get('followers')
+        views = result.get('views')
+        
+        processed.append({
+            'followers': followers,
+            'views': views,
+            'image': img_path,
+        })
+        
+        if followers is not None and followers != 'null' and followers != '':
+            norm_val = normalize_number(followers)
+            if norm_val is not None:
+                followers_candidates.append((norm_val, followers, img_path))
+                print(f"      ✓ 找到粉丝数: {followers} (在 {img_name})")
+        
+        if views is not None and views != 'null' and views != '':
+            norm_val = normalize_number(views)
+            if norm_val is not None:
+                views_candidates.append((norm_val, views, img_path))
+                print(f"      ✓ 找到阅读量: {views} (在 {img_name})")
+    
+    # After processing all images, select MAX
     result = {
         'followers': None,
         'views': None,
-        'processed': [],
-        'found_in': None
+        'processed': processed,
+        'found_in': None,
     }
     
-    followers_candidates = []  # (normalized_value, original_value, image_path)
-    views_candidates = []      # (normalized_value, original_value, image_path)
-    
-    for img_path in slide_images:
-        print(f"      识别图片: {Path(img_path).name}")
-        stats = extract_stats_from_image(img_path, api_key, base_url, model)
-        result['processed'].append(stats)
-        
-        # Collect followers candidate
-        if stats['followers'] and stats['followers'] != 'null':
-            norm_val = normalize_number_for_compare(stats['followers'])
-            if norm_val is not None:
-                followers_candidates.append((norm_val, stats['followers'], img_path))
-                print(f"      ✓ 找到粉丝数: {stats['followers']} (在 {Path(img_path).name})")
-        
-        # Collect views candidate
-        if stats['views'] and stats['views'] != 'null':
-            norm_val = normalize_number_for_compare(stats['views'])
-            if norm_val is not None:
-                views_candidates.append((norm_val, stats['views'], img_path))
-                print(f"      ✓ 找到阅读量: {stats['views']} (在 {Path(img_path).name})")
-    
-    # After processing all images, select the MAXIMUM value
-    # Because reading/followers grows over time, larger = newer
     if followers_candidates:
-        # Sort by normalized value and take the largest
         followers_candidates.sort(key=lambda x: x[0])
         largest = followers_candidates[-1]
         result['followers'] = largest[1]
@@ -204,15 +267,72 @@ def process_slide_images(slide_images, api_key, base_url, model):
     return result
 
 
-def read_excel_data(excel_path):
-    """Read Excel file"""
+def process_slide_images_openai(slide_images: list[str], client, model):
+    """OpenAI compatible version"""
+    followers_candidates: list[tuple[int, str, str]] = []  # (normalized, original, image_path)
+    views_candidates: list[tuple[int, str, str]] = []
+    
+    processed = []
+    
+    for img_path in slide_images:
+        print(f"      识别图片: {Path(img_path).name}")
+        stats = extract_stats_from_image_openai(img_path, client, model)
+        processed.append(stats)
+        
+        if stats['followers'] and stats['followers'] != 'null':
+            norm_val = normalize_number(stats['followers'])
+            if norm_val is not None:
+                followers_candidates.append((norm_val, stats['followers'], img_path))
+                print(f"      ✓ 找到粉丝数: {stats['followers']} (在 {Path(img_path).name})")
+        
+        if stats['views'] and stats['views'] != 'null':
+            norm_val = normalize_number(stats['views'])
+            if norm_val is not None:
+                views_candidates.append((norm_val, stats['views'], img_path))
+                print(f"      ✓ 找到阅读量: {stats['views']} (在 {Path(img_path).name})")
+    
+    # After processing all images, select MAX
+    result = {
+        'followers': None,
+        'views': None,
+        'processed': processed,
+        'found_in': None,
+    }
+    
+    if followers_candidates:
+        followers_candidates.sort(key=lambda x: x[0])
+        largest = followers_candidates[-1]
+        result['followers'] = largest[1]
+        result['found_in'] = largest[2]
+        if len(followers_candidates) > 1:
+            print(f"      ⚙ 选择最大值: {largest[1]} (共 {len(followers_candidates)} 个候选)")
+    
+    if views_candidates:
+        views_candidates.sort(key=lambda x: x[0])
+        largest = views_candidates[-1]
+        result['views'] = largest[1]
+        result['found_in'] = largest[2]
+        if len(views_candidates) > 1:
+            print(f"      ⚙ 选择最大值: {largest[1]} (共 {len(views_candidates)} 个候选)")
+    
+    if result['found_in'] is None:
+        if followers_candidates:
+            result['found_in'] = followers_candidates[-1][2]
+        elif views_candidates:
+            result['found_in'] = views_candidates[-1][2]
+    
+    return result
+
+
+def read_excel_data(excel_path: Path):
+    """Read Excel data"""
     wb = load_workbook(excel_path, data_only=True)
     ws = wb.active
-
+    
     headers = []
     for col in range(1, ws.max_column + 1):
         headers.append(ws.cell(1, col).value)
-
+    
     data_rows = []
     for row in range(2, ws.max_row + 1):
         row_data = {}
@@ -222,60 +342,15 @@ def read_excel_data(excel_path):
             row_data[header] = value
         row_data['_excel_row'] = row
         data_rows.append(row_data)
-
+    
     return headers, data_rows, wb, ws
 
 
-def normalize_number(value):
-    """Normalize number from string to int"""
-    if value is None or value == 'null' or value == 'None' or value == '':
-        return None
-    
-    value = str(value).strip().lower()
-    # Handle units: 27.6万, 1.3k, 1,649
-    value = value.replace(',', '').replace(' ', '')
-    
-    # Extract first number if multiple dots (e.g "108.2142.1" → "108.2142")
-    parts = value.split('.')
-    if len(parts) > 2:
-        # Join first two parts, ignore extra
-        value = '.'.join(parts[:2])
-    
-    if '万' in value:
-        num_str = value.replace('万', '')
-        try:
-            num = float(num_str)
-            return int(num * 10000)
-        except ValueError:
-            return None
-    if 'k' in value or '千' in value:
-        num_str = value.replace('k', '').replace('千', '')
-        try:
-            num = float(num_str)
-            return int(num * 1000)
-        except ValueError:
-            return None
-    
-    try:
-        return int(float(value))
-    except ValueError:
-        # If still fails, try extract any digits
-        import re
-        digits = re.findall(r'\d+', value)
-        if digits:
-            # Join all digits and convert
-            try:
-                return int(''.join(digits))
-            except ValueError:
-                pass
-        return None
-
-
-def validate_row(excel_row, ppt_data, slide_image_stats):
-    """Validate Excel row with automatic image extraction"""
+def validate_row(excel_row: dict, ppt_data: dict, slide_image_stats: dict):
+    """Validate one row against Excel"""
     results = {
         'excel_row': excel_row['_excel_row'],
-        'slide': ppt_data.get('slide_number')
+        'slide': ppt_data.get('slide_number'),
     }
 
     # 校验1: 发布平台
@@ -323,21 +398,21 @@ def validate_row(excel_row, ppt_data, slide_image_stats):
         results['check_4'] = 'N/A：Excel和PPT都未记录账号信息'
     elif (excel_account == '/' or excel_account == '') and ppt_account:
         results['check_4'] = f'否：Excel未记录，PPT显示"{ppt_account}"'
-    elif ppt_account and excel_account == ppt_account:
+    elif ppt_account and str(excel_account).strip() == str(ppt_account).strip():
         results['check_4'] = '是'
     elif not ppt_account:
         results['check_4'] = 'N/A：PPT未显示账号信息'
     else:
         results['check_4'] = f'否：PPT显示"{ppt_account}"，Excel为"{excel_account}"'
 
-    # 校验5-6: 粉丝数和阅读量 (来自所有图片自动识别)
-    print(f"  获取统计数据（遍历每页所有图片自动识别）")
+    # 校验5-6: 粉丝数和阅读量 (来自图片识别，取最大值)
+    print(f"  获取统计数据（文字优先，图片兜底，收集结果取最大值）")
     
     followers = slide_image_stats.get('followers')
     views = slide_image_stats.get('views')
     found_in = slide_image_stats.get('found_in')
     
-    source_display = f"截图自动识别 ({Path(found_in).parent.name}/{Path(found_in).name})" if found_in else "自动识别"
+    source_display = f"自动识别 ({Path(found_in).parent.name}/{Path(found_in).name})" if found_in else "自动识别"
 
     # 校验5: 粉丝数量
     excel_followers = str(excel_row.get('粉丝量', '/')).strip()
@@ -346,7 +421,7 @@ def validate_row(excel_row, ppt_data, slide_image_stats):
     if followers and followers != 'null':
         print(f"    ✓ 粉丝数: {followers} (来源:{source_display})")
         try:
-            if excel_followers == '/' or excel_followers == 'nan':
+            if excel_followers == '/' or excel_followers == 'nan' or excel_followers == '':
                 results['check_5'] = f'信息：{source_display}显示{followers}，Excel未记录'
             else:
                 excel_f = normalize_number(excel_followers)
@@ -368,7 +443,7 @@ def validate_row(excel_row, ppt_data, slide_image_stats):
     if views and views != 'null':
         print(f"    ✓ 阅读量: {views} (来源:{source_display})")
         try:
-            if excel_views == '/' or excel_views == 'nan':
+            if excel_views == '/' or excel_views == 'nan' or excel_views == '':
                 results['check_6'] = f'信息：{source_display}显示{views}，Excel未记录'
             else:
                 excel_v = normalize_number(excel_views)
@@ -398,7 +473,7 @@ def validate_row(excel_row, ppt_data, slide_image_stats):
 
 
 def add_validation_columns(ws, validation_results):
-    """Add validation columns with formatting"""
+    """Add validation columns to Excel with coloring"""
     validation_headers = [
         "校验1-发布平台",
         "校验2-文章标题",
@@ -444,37 +519,22 @@ def add_validation_columns(ws, validation_results):
                 cell.font = Font(color="9C6500")
 
 
-def main(ppt_path, excel_path, output_path=None):
-    """
-    Full automatic validation workflow:
-    1. Extract text from PPT
-    2. Extract all images from each slide
-    3. Auto-recognize each image for followers/views
-    4. Parse PPT data
-    5. Validate against Excel
-    6. Generate result Excel
-    """
-    # Get config from environment
-    api_key = os.environ.get('OPENCLAW_VISION_API_KEY')
-    if not api_key:
-        api_key = os.environ.get('ANTHROPIC_API_KEY', api_key)
-    if not api_key:
-        api_key = os.environ.get('OPENAI_API_KEY', api_key)
-    
-    if not api_key:
-        print("❌ 找不到API密钥，请设置环境变量:")
-        print("   OPENCLAW_VISION_API_KEY 或 ANTHROPIC_API_KEY 或 OPENAI_API_KEY")
+def main(ppt_path: str, excel_path: str, output_path: str = None):
+    """Main workflow"""
+    # Get client
+    try:
+        client_type, client_data = get_client()
+    except ValueError as e:
+        print(e)
         sys.exit(1)
-    
-    base_url = os.environ.get('OPENCLAW_VISION_BASE_URL', 'https://ark.cn-beijing.volces.com/api/coding/v3')
-    model = os.environ.get('OPENCLAW_VISION_MODEL', 'doubao-seed-2.0-code')
     
     ppt_path = Path(ppt_path)
     excel_path = Path(excel_path)
 
     print("=" * 80)
     print("Batch Validator - 全自动完整校验")
-    print("流程: 提取文字 → 提取所有图片 → 逐图识别 → 汇总 → 校验 → 输出")
+    print("流程: 提取文字 → 提取所有图片 → 文字优先搜索 → 图片兜底识别缺失字段 → 汇总取最大值 → 校验 → 输出")
+    print(f"Vision 模型: {'Kimi K2.5' if client_type == 'kimi' else 'OpenAI 兼容'}")
     print("=" * 80)
     print()
 
@@ -488,10 +548,12 @@ def main(ppt_path, excel_path, output_path=None):
     print("Step 2: 提取每页所有图片...")
     images_dir = ppt_path.parent / f"{ppt_path.stem}_all_images"
     slide_images_dict = extract_all_images(str(ppt_path), str(images_dir))
+    total_images = sum(len(imgs) for imgs in slide_images_dict.values())
+    print(f"  总计 {len(slide_images_dict)} 页, {total_images} 张图片")
     print()
 
-    # Step 3: Auto-recognize stats from all images
-    print("Step 3: 自动识别每页所有图片，提取粉丝数/阅读量...")
+    # Step 3: Auto-recognize missing stats from all images
+    print("Step 3: 图片识别提取统计数据 (每张图片都识别，最后取最大值)...")
     print()
     
     auto_stats = {}
@@ -499,15 +561,20 @@ def main(ppt_path, excel_path, output_path=None):
     for slide_num, slide_images in slide_images_dict.items():
         if not slide_images:
             print(f"  第 {slide_num} 页: 没有图片，跳过")
-            auto_stats[slide_num] = {
+            auto_stats[f"slide_{slide_num}"] = {
                 'followers': None,
                 'views': None,
-                'processed': []
+                'processed': [],
+                'found_in': None
             }
             continue
         
         print(f"  第 {slide_num} 页: {len(slide_images)} 张图片")
-        result = process_slide_images(slide_images, api_key, base_url, model)
+        if client_type == 'kimi':
+            result = process_slide_images_kimi(slide_images)
+        else:
+            client, model = client_data
+            result = process_slide_images_openai(slide_images, client, model)
         auto_stats[f"slide_{slide_num}"] = result
         print()
     
@@ -526,7 +593,7 @@ def main(ppt_path, excel_path, output_path=None):
 
     # Step 5: Read Excel
     print("Step 5: 读取Excel数据...")
-    headers, excel_rows, wb, ws = read_excel_data(str(excel_path))
+    headers, excel_rows, wb, ws = read_excel_data(excel_path)
     print(f"  Excel行数: {len(excel_rows)}")
     print()
 
@@ -556,10 +623,6 @@ def main(ppt_path, excel_path, output_path=None):
     wb.save(output_path)
     print(f"✓ 校验结果已保存：{output_path}")
 
-    # Cleanup temp json (keep it for debugging)
-    # temp_json.unlink()
-    # auto_stats_json.unlink()
-
     # Summary
     print("\n" + "=" * 80)
     print("校验汇总")
@@ -573,7 +636,16 @@ def main(ppt_path, excel_path, output_path=None):
     print(f"总计: {total} 行")
     print(f"全部通过: {passed} 行")
     print(f"存在问题: {total - passed} 行")
-    print(f"\n图片识别结果保存在: {auto_stats_json}")
+    print(f"\n图片识别结果: {auto_stats_json}")
+    print(f"输出文件: {output_path}")
+    
+    # List issues
+    if total - passed > 0:
+        print(f"\n存在问题的行:")
+        for r in validation_results:
+            issues = [r[f'check_{i}'] for i in range(1, 8) if r[f'check_{i}'].startswith('否')]
+            if issues:
+                print(f"  第{r['excel_row']}行: {issues[0]}")
 
 
 if __name__ == "__main__":
@@ -582,20 +654,17 @@ if __name__ == "__main__":
         print()
         print("✨ 全自动流程:")
         print("  1. 提取PPT文字")
-        print("  2. 提取每页所有图片（多张都提取）")
-        print("  3. 每张图片依次调用OpenClaw vision识别")
-        print("  4. 汇总找到粉丝数/阅读量")
+        print("  2. 提取每页所有图片（多张不漏）")
+        print("  3. 文字优先查询结构化信息，文字找不到才图片识别")
+        print("  4. 每张图片都识别，收集所有找到的值 → 粉丝/阅读分别取最大值")
+        print("    → 符合需求：阅读量随着时间会快速变化，我们应该取最大的那个值")
         print("  5. 和Excel对比校验")
         print("  6. 生成带颜色标记的结果Excel")
         print()
-        print("需要设置环境变量:")
-        print("  OPENCLAW_VISION_API_KEY - 视觉模型API密钥")
-        print("  OPENCLAW_VISION_BASE_URL - (可选) API地址")
-        print("  OPENCLAW_VISION_MODEL - (可选) 模型名称")
+        print("环境变量配置:")
+        print("  - Kimi K2.5:  export MOONSHOT_API_KEY=your-key")
+        print("  - OpenAI兼容（豆包）:  export OPENCLAW_VISION_API_KEY=your-key")
         print()
-        print("示例:")
-        print("  export OPENCLAW_VISION_API_KEY=xxx")
-        print("  uv run scripts/full_auto_validate.py presentation.pptx data.xlsx")
         sys.exit(1)
 
     ppt_file = sys.argv[1]
