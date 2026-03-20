@@ -1,8 +1,8 @@
 ---
 name: batch-validator
-description: Excel vs PPT批量信息校验系统。自动提取PPT文字和截图，对比Excel数据，校验平台、标题、时间、账号、粉丝数、阅读量、见刊位置等7项内容。支持3级数据提取（PPT文字→截图→网页），生成格式化校验结果Excel。适用于媒体发稿核对、信息一致性检查、批量数据验证等场景。
+description: Excel vs PPT批量信息校验系统。支持PPT信息提取（文字+图片）和智能查询（文字优先、Kimi K2.5图片兜底），以及Excel vs PPT一致性校验。适用于媒体发稿核对、信息一致性检查、批量数据验证等场景。
 author: 用户自定义
-version: 1.0.0
+version: 2.0.0
 homepage: ""
 triggers:
   - "校验Excel"
@@ -12,6 +12,9 @@ triggers:
   - "批量检查"
   - "信息核对"
   - "Excel PPT校验"
+  - "提取信息"
+  - "查询"
+  - "查询信息"
 metadata: {"clawdbot":{"emoji":"✅","requires":{"bins":["python3"]}}}
 ---
 
@@ -21,48 +24,90 @@ metadata: {"clawdbot":{"emoji":"✅","requires":{"bins":["python3"]}}}
 
 ## 核心功能
 
-- 🎯 **智能触发**：识别「校验Excel」「验证PPT」等关键词，自动引导完整流程
+- 🎯 **智能触发**：识别「校验Excel」「查询信息」「提取信息」等关键词，自动引导完整流程
 - 📄 **文字提取**：自动从PPT文字标注提取平台、标题、日期、位置等信息
-- 🖼️ **截图识别**：使用Claude视觉能力从PPT截图提取粉丝数、阅读量
+- 🖼️ **图片提取**：从PPT每页抽取所有嵌入图片，按页分文件夹存储
+- 🤖 **智能查询**：文字优先，找不到时自动用 Kimi K2.5 从图片中提取
 - 🌐 **网页补充**：自动从见刊链接抓取缺失的统计数据
 - ✅ **7项校验**：平台、标题、时间、账号、粉丝数、阅读量、位置全面对比
 - 🎨 **格式化输出**：颜色编码（绿/红/黄），详细失败原因，列宽优化
-- 💾 **自动保存**：结果保存到原Excel同目录，命名规则：`原文件名-校验结果.xlsx`
-- 🔄 **3级优先级**：粉丝数/阅读量按 PPT文字→截图→网页 逐级提取
 
-## 快速使用
+---
 
-### 基础校验（推荐）
+## 工作流一：信息提取
 
+**触发词**：「提取信息」「提取」
+
+当用户说「提取信息」时，对 PPT 文件同时执行两步：
+
+**Step 1：提取每页文字**
 ```bash
-uv run scripts/validate.py <ppt文件> <excel文件>
+uv run scripts/extract_ppt_text.py <pptx文件>
+# 自动输出到 {pptx名}_text/slide_001.txt, slide_002.txt ...
 ```
 
-**自动完成：**
-1. 提取PPT文字标注
-2. 解析平台、标题、日期、位置、账号
-3. 与Excel逐行对比校验
-4. 尝试从网页获取粉丝数/阅读量
-5. 生成 `原文件名-校验结果.xlsx`
-
-### 完整校验（含截图数据）
-
-**Step 1：生成截图任务**
+**Step 2：提取每页图片**
 ```bash
-uv run scripts/create_screenshot_tasks.py <slides目录> <ppt_text.json> screenshot_stats.json
+uv run scripts/extract_all_images.py <pptx文件>
+# 自动输出到 {pptx名}_images/slide_001/img_*.png ...
 ```
 
-**Step 2：Claude提取截图数据**
-- 打开 `screenshot_stats.json`
-- 对每个slide，用Claude读取图片并提取粉丝数/阅读量
-- 更新JSON文件
-
-**Step 3：运行完整校验**
-```bash
-uv run scripts/validate.py <ppt文件> <excel文件> screenshot_stats.json
+执行后目录结构：
+```
+场景2/夏广州车展新闻稿发稿明细-测试_text/
+├── slide_001.txt   # 每页文字
+├── slide_002.txt
+└── ...
+场景2/夏广州车展新闻稿发稿明细-测试_images/
+├── slide_001/      # 每页图片
+│   ├── img_01_1179x2556.png
+│   └── img_02_1080x2388.png
+└── ...
 ```
 
-## 校验规则
+---
+
+## 工作流二：信息查询
+
+**触发词**：「查询」「查询XX信息」
+
+当用户说「查询 XX 信息」时，调用 `query_info.py`：
+
+1. **先在文字中搜**（`_text/slide_xxx.txt`），找到即返回，来源标记为 `text`
+2. **文字没找到**，自动调用 Kimi K2.5 识别 `_images/slide_xxx/` 下的图片，来源标记为 `image`
+
+```bash
+# 查询所有页
+uv run scripts/query_info.py \
+  --base "场景2/夏广州车展新闻稿发稿明细-测试" \
+  --fields "平台名称" "文章标题" "发布时间" "粉丝数" "阅读量"
+
+# 只查某一页
+uv run scripts/query_info.py \
+  --base "场景2/夏广州车展新闻稿发稿明细-测试" \
+  --fields "阅读量" "粉丝数" \
+  --slide 7
+```
+
+`--base` 是 PPT 路径去掉 `.pptx`，脚本自动拼接 `_text/` 和 `_images/`。
+
+输出示例：
+```json
+[
+  {
+    "slide": 7,
+    "平台名称": {"value": "腾讯",   "source": "text"},
+    "粉丝数":   {"value": 1005,    "source": "image"},
+    "阅读量":   {"value": 20036,   "source": "image"}
+  }
+]
+```
+
+> 需要设置环境变量：`MOONSHOT_API_KEY` 或 `MOONSHOT_MODEL_KEY`
+
+---
+
+## 工作流三：Excel vs PPT 批量校验
 
 | 序号 | 校验项 | 规则 | 数据来源 |
 |------|--------|------|----------|
@@ -109,50 +154,30 @@ uv run scripts/validate.py <ppt文件> <excel文件> screenshot_stats.json
 
 ## 依赖安装
 
-**基础依赖（必需）：**
 ```bash
 cd batch-validator
 uv sync
 ```
 
-**Vision API（可选，用于截图识别）：**
-```bash
-# 选择一个或多个大模型平台
-uv sync --extra claude     # Anthropic Claude（推荐）
-uv sync --extra openai     # OpenAI GPT-4V
-uv sync --extra gemini     # Google Gemini
-uv sync --extra all        # 安装所有Vision API
-
-# 配置API密钥
-cp .env.example .env
-# 编辑.env文件，填入API密钥
-```
-
-**支持的大模型平台：**
-- ✅ **Claude** (Anthropic) - 推荐，准确率高
-- ✅ **GPT-4V** (OpenAI) - 通用性强
-- ✅ **Gemini** (Google) - 免费额度大
-
-系统会自动检测可用的API密钥并选择合适的后端。
+依赖包：
+- `openpyxl` - Excel读写
+- `python-pptx` - PPT文字和图片提取
+- `pillow` - 图像处理
+- `requests` + `beautifulsoup4` - 网页抓取
+- `openai` - Kimi K2.5 API
 
 ## 目录结构
 
 ```
 batch-validator/
-├── .clawhook                    # OpenClaw触发钩子
 ├── SKILL.md                     # 技能说明（本文件）
-├── WORKFLOW.md                  # 详细工作流程
-├── README.md                    # 使用文档
 ├── pyproject.toml              # uv依赖配置
-├── scripts/                    # 快捷脚本
-│   ├── validate.py            # 主校验脚本
-│   ├── extract_ppt.py         # PPT文字提取
-│   └── create_screenshot_tasks.py  # 截图任务生成
-└── batch-validator/           # 核心源代码
-    ├── extractors/            # 数据提取模块
-    ├── validators/            # 校验逻辑模块
-    ├── formatters/            # Excel格式化模块
-    └── utils/                 # 工具函数
+└── scripts/
+    ├── validate.py             # Excel vs PPT 主校验脚本
+    ├── extract_ppt_text.py     # PPT 文字提取（每页 txt）
+    ├── extract_all_images.py   # PPT 图片提取（每页文件夹）
+    ├── extract_content.py      # Kimi K2.5 图片内容提取
+    └── query_info.py           # 智能查询（文字优先 + 图片兜底）
 ```
 
 ## 使用场景

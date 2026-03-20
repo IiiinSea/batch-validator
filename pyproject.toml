@@ -8,15 +8,8 @@ dependencies = [
     "pillow>=10.0.0",
     "requests>=2.31.0",
     "beautifulsoup4>=4.12.0",
+    "openai>=1.0",
 ]
-
-[project.optional-dependencies]
-# Vision API支持 - 根据需要选择安装
-claude = ["anthropic>=0.18.0"]
-openai = ["openai>=1.12.0"]
-gemini = ["google-generativeai>=0.3.0"]
-# 或安装全部
-all = ["anthropic>=0.18.0", "openai>=1.12.0", "google-generativeai>=0.3.0"]
 
 [tool.uv]
 python-preference = "only-managed"

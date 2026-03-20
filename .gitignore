@@ -23,6 +23,10 @@ slides/
 web_content/
 screenshot_stats.json
 
+# 测试输出
+test_slides/
+test_output/
+
 # 测试文件
 test_*.xlsx
 test_*.pptx

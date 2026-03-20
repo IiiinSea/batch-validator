@@ -7,7 +7,7 @@ echo "========================================="
 echo ""
 
 # 检查测试文件
-TEST_DIR="/Users/dingpei/Downloads/tmp/agent-demo材料/场景2"
+TEST_DIR="/Users/zhangzhiyong/IdeaProjects/go/mone/jcommon/skills/batch-validator/场景2"
 PPT_FILE="$TEST_DIR/夏广州车展新闻稿发稿明细-测试.pptx"
 EXCEL_FILE="$TEST_DIR/夏广州车展新闻稿发稿见刊表格-测试.xlsx"
 

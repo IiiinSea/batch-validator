@@ -60,17 +60,31 @@ def extract_ppt_text(ppt_path, output_json=None):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python3 extract_ppt_text.py <pptx_file> [output_json]")
-        sys.exit(1)
+    import argparse
 
-    ppt_file = sys.argv[1]
-    output_json = sys.argv[2] if len(sys.argv) >= 3 else None
+    parser = argparse.ArgumentParser(description="从 PPT 中提取每页文字")
+    parser.add_argument("pptx", help="PPT 文件路径")
+    parser.add_argument("--json", dest="output_json", help="输出 JSON 文件路径")
+    parser.add_argument(
+        "--txt-dir",
+        help="每页输出一个 txt 文件的目录（不指定则自动用 {PPT名}_text/）",
+    )
+    args = parser.parse_args()
 
-    print(f"Extracting text from: {ppt_file}\n")
+    print(f"Extracting text from: {args.pptx}\n")
     print("=" * 80)
 
-    slides_data = extract_ppt_text(ppt_file, output_json)
+    slides_data = extract_ppt_text(args.pptx, args.output_json)
 
     print("=" * 80)
     print(f"\n✓ Extracted text from {len(slides_data)} slides")
+
+    txt_dir = args.txt_dir or str(Path(args.pptx).parent / f"{Path(args.pptx).stem}_text")
+    out = Path(txt_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for key, data in slides_data.items():
+        (out / f"{key}.txt").write_text(
+            f"=== Slide {data['slide_number']} ===\n{data['full_text']}\n",
+            encoding="utf-8",
+        )
+    print(f"✓ Per-slide txt files saved to: {out}")

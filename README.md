@@ -87,54 +87,35 @@ uv run scripts/validate.py 月度报告.pptx 原始数据.xlsx stats.json
 
 ## 🔧 配置说明
 
-### Vision API配置（重要）
+### pyproject.toml
 
-为了实现跨平台可移植，skill支持多个大模型的视觉API：
-
-**Step 1: 选择并安装Vision API**
-```bash
-# 选择一个大模型平台（根据你有的API密钥）
-uv sync --extra claude     # Anthropic Claude
-uv sync --extra openai     # OpenAI GPT-4V
-uv sync --extra gemini     # Google Gemini
-uv sync --extra all        # 安装全部（推荐）
+依赖配置：
+```toml
+[project]
+name = "batch-validator"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "openpyxl",          # Excel处理
+    "python-pptx",       # PPT处理
+    "pillow",            # 图像处理
+    "requests",          # HTTP请求
+    "beautifulsoup4",    # HTML解析
+]
 ```
 
-**Step 2: 配置API密钥**
-```bash
-# 复制配置模板
-cp .env.example .env
+### 环境变量（可选）
 
-# 编辑.env文件
-nano .env
-```
-
-`.env` 文件内容：
+创建 `.env` 文件配置默认值：
 ```env
-# 至少配置一个API密钥
-ANTHROPIC_API_KEY=sk-ant-xxxxx        # Claude
-OPENAI_API_KEY=sk-xxxxx               # GPT-4V
-GOOGLE_API_KEY=xxxxx                  # Gemini
+# 默认输出目录
+OUTPUT_DIR=./output
 
-# 可选：指定优先使用的后端
-PREFERRED_VISION_BACKEND=claude
-```
-
-**支持的平台：**
-- **Claude** (Anthropic) - 推荐，中文识别准确率高
-- **GPT-4V** (OpenAI) - 通用性强，生态丰富
-- **Gemini** (Google) - 免费额度大，速度快
-
-系统会自动检测可用的API并选择使用。
-
-### 其他配置（可选）
-
-```env
 # 网页抓取超时（秒）
 WEB_TIMEOUT=10
 
-# 输出目录
-OUTPUT_DIR=./output
+# 是否自动打开结果文件
+AUTO_OPEN_RESULT=false
 ```
 
 ---
