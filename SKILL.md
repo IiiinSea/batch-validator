@@ -173,7 +173,7 @@ batch-validator/
 ├── SKILL.md                     # 技能说明（本文件）
 ├── pyproject.toml              # uv依赖配置
 └── scripts/
-    ├── validate.py             # Excel vs PPT 主校验脚本
+    ├── full_auto_validate.py   # Excel vs PPT 主校验脚本
     ├── extract_ppt_text.py     # PPT 文字提取（每页 txt）
     ├── extract_all_images.py   # PPT 图片提取（每页文件夹）
     ├── extract_content.py      # Kimi K2.5 图片内容提取
