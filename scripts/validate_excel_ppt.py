@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from extract_ppt_text import extract_ppt_text
-from extract_slides_smart import extract_slide_images
+from extract_all_slide_images import extract_all_images_per_slide
 from parse_ppt_data import parse_all_slides
 from openpyxl import load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill
@@ -90,12 +90,15 @@ def fetch_stats_from_url(url):
         return {'followers': None, 'views': None, 'error': str(e)}
 
 
-def get_stats_3tier(slide_number, ppt_text_data, screenshot_stats, url, slide_image_path=None):
+def get_stats_3tier(slide_number, ppt_text_data, screenshot_stats, url, slide_images_list=None):
     """
     Get stats with 3-tier priority:
     1. PPT text (already in ppt_text_data)
-    2. Screenshot (from screenshot_stats JSON or auto OCR)
+    2. Screenshots - analyze ALL images in this slide (from screenshot_stats JSON or auto Vision API)
     3. Web page (fetch if needed)
+
+    Args:
+        slide_images_list: List of image paths for this slide
 
     Returns: dict with followers, views, and source
     """
@@ -123,26 +126,42 @@ def get_stats_3tier(slide_number, ppt_text_data, screenshot_stats, url, slide_im
             if not result['source']:
                 result['source'] = 'screenshot'
 
-    # Tier 2: Auto Vision API if screenshot_stats not provided
-    if slide_image_path and not screenshot_stats and (not result['followers'] or not result['views']):
-        print(f"    尝试使用Vision API自动识别截图...")
+    # Tier 2: Auto Vision API - analyze ALL images in this slide
+    if slide_images_list and not screenshot_stats and (not result['followers'] or not result['views']):
+        print(f"    尝试使用Vision API识别截图（共{len(slide_images_list)}张）...")
         try:
             from vision_api import auto_extract_stats
-            vision_stats = auto_extract_stats(slide_image_path)
 
-            if 'error' not in vision_stats:
-                if not result['followers'] and vision_stats.get('followers'):
-                    result['followers'] = vision_stats['followers']
-                    result['source'] = vision_stats.get('backend', 'vision')
+            # Process each image in this slide
+            for img_idx, img_path in enumerate(slide_images_list, 1):
+                # Skip if we already have both stats
+                if result['followers'] and result['views']:
+                    break
 
-                if not result['views'] and vision_stats.get('views'):
-                    result['views'] = vision_stats['views']
-                    result['source'] = result['source'] or vision_stats.get('backend', 'vision')
+                print(f"      分析图片 {img_idx}/{len(slide_images_list)}: {Path(img_path).name}")
 
-                if result['followers'] or result['views']:
-                    print(f"      ✓ 识别成功 ({vision_stats.get('backend', 'vision')}): 粉丝={result.get('followers', 'N/A')}, 阅读={result.get('views', 'N/A')}")
+                vision_stats = auto_extract_stats(img_path)
+
+                if 'error' not in vision_stats:
+                    # Merge results
+                    if not result['followers'] and vision_stats.get('followers'):
+                        result['followers'] = vision_stats['followers']
+                        result['source'] = vision_stats.get('backend', 'vision')
+                        print(f"        ✓ 找到粉丝数: {result['followers']}")
+
+                    if not result['views'] and vision_stats.get('views'):
+                        result['views'] = vision_stats['views']
+                        result['source'] = result['source'] or vision_stats.get('backend', 'vision')
+                        print(f"        ✓ 找到阅读量: {result['views']}")
+                else:
+                    print(f"        ⚠ 识别失败: {vision_stats.get('error', 'Unknown')}")
+
+            # Summary for this slide
+            if result['followers'] or result['views']:
+                print(f"      ✓ 汇总结果: 粉丝={result.get('followers', 'N/A')}, 阅读={result.get('views', 'N/A')}")
             else:
-                print(f"      ⚠ Vision API不可用: {vision_stats.get('error', 'Unknown error')}")
+                print(f"      ✗ 所有图片均未找到粉丝数和阅读量")
+
         except ImportError:
             print(f"      ⚠ Vision API模块未安装（可选功能）")
         except Exception as e:
@@ -167,8 +186,13 @@ def get_stats_3tier(slide_number, ppt_text_data, screenshot_stats, url, slide_im
     return result
 
 
-def validate_row(excel_row, ppt_data, screenshot_stats, slide_image_path=None):
-    """Validate Excel row with 3-tier stats extraction (including OCR)"""
+def validate_row(excel_row, ppt_data, screenshot_stats, slide_images_list=None):
+    """
+    Validate Excel row with 3-tier stats extraction
+
+    Args:
+        slide_images_list: List of image paths for this slide (may have multiple images)
+    """
     results = {
         'excel_row': excel_row['_excel_row'],
         'slide': ppt_data.get('slide_number')
@@ -223,7 +247,7 @@ def validate_row(excel_row, ppt_data, screenshot_stats, slide_image_path=None):
     slide_num = ppt_data.get('slide_number')
     url = ppt_data.get('link')
 
-    stats = get_stats_3tier(slide_num, ppt_data, screenshot_stats, url, slide_image_path)
+    stats = get_stats_3tier(slide_num, ppt_data, screenshot_stats, url, slide_images_list)
 
     source_display = {
         'screenshot': '截图',
@@ -377,11 +401,12 @@ def main(ppt_path, excel_path, screenshot_stats_json=None, output_path=None):
     temp_json = ppt_path.parent / "ppt_text_temp.json"
     extract_ppt_text(str(ppt_path), str(temp_json))
 
-    # Step 2: Extract slide screenshots (for OCR or manual processing)
-    print("\nStep 2: 提取PPT幻灯片截图...")
+    # Step 2: Extract ALL images from each slide
+    print("\nStep 2: 提取PPT幻灯片截图（每页所有图片）...")
     slides_dir = ppt_path.parent / "slides"
-    slide_images = extract_slide_images(str(ppt_path), str(slides_dir))
-    print(f"  提取了 {len(slide_images)} 张幻灯片")
+    slides_images_map = extract_all_images_per_slide(str(ppt_path), str(slides_dir))
+    total_images = sum(len(imgs) for imgs in slides_images_map.values())
+    print(f"  提取了 {len(slides_images_map)} 页，共 {total_images} 张图片")
 
     # Step 3: Parse PPT data
     print("\nStep 3: 解析PPT数据...")
@@ -413,10 +438,11 @@ def main(ppt_path, excel_path, screenshot_stats_json=None, output_path=None):
             print(f"\n第{i+1}行:")
             ppt_data = ppt_slides_data[i]
 
-            # Get corresponding slide image if available
-            slide_img = slide_images[i] if i < len(slide_images) else None
+            # Get corresponding slide images (all images in this slide)
+            slide_num = i + 1
+            slide_imgs = slides_images_map.get(slide_num, [])
 
-            result = validate_row(excel_row, ppt_data, screenshot_stats, slide_img)
+            result = validate_row(excel_row, ppt_data, screenshot_stats, slide_imgs)
             validation_results.append(result)
             print(f"  ✓ 校验完成")
 

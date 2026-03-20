@@ -1,0 +1,60 @@
+{
+  "1": [
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_001_img_01.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_001_img_02.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_001_img_03.png"
+  ],
+  "2": [
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_002_img_01.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_002_img_02.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_002_img_03.png"
+  ],
+  "3": [
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_003_img_01.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_003_img_02.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_003_img_03.png"
+  ],
+  "4": [
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_004_img_01.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_004_img_02.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_004_img_03.png"
+  ],
+  "5": [
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_005_img_01.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_005_img_02.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_005_img_03.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_005_img_04.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_005_img_05.png"
+  ],
+  "6": [
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_006_img_01.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_006_img_02.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_006_img_03.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_006_img_04.png"
+  ],
+  "7": [
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_007_img_01.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_007_img_02.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_007_img_03.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_007_img_04.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_007_img_05.png"
+  ],
+  "8": [
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_008_img_01.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_008_img_02.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_008_img_03.png"
+  ],
+  "9": [
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_009_img_01.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_009_img_02.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_009_img_03.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_009_img_04.png"
+  ],
+  "10": [
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_010_img_01.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_010_img_02.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_010_img_03.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_010_img_04.png",
+    "/Users/dingpei/yiling/batch-validator/test_slides/slide_010_img_05.png"
+  ]
+}
